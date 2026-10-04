@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Hamiz Pulse</title>
+<meta name="description" content="HamizOnline sales and Meta Ads performance">
+<meta name="theme-color" content="#f6f3f0" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#131110" media="(prefers-color-scheme: dark)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Pulse">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600&display=swap">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<header class="top">
+  <div class="bar">
+    <div class="brand"><b>Hamiz <span>Pulse</span></b></div>
+    <div class="sync" id="sync" role="status" aria-live="polite"><i class="dot" id="syncDot"></i><span id="syncText">Connecting…</span></div>
+    <div class="seg" role="group" aria-label="Section">
+      <button id="secSales" aria-pressed="true">Sales</button>
+      <button id="secAds" aria-pressed="false">Ads</button>
+    </div>
+  </div>
+  <nav class="tabs" id="tabs" role="tablist" aria-label="Tabs"></nav>
+</header>
+<main id="main"><div class="empty">Loading the latest Odoo sync…</div></main>
+<script src="/calc.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>

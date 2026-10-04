@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Sign in · Hamiz Pulse</title>
+<meta name="theme-color" content="#f6f3f0" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#131110" media="(prefers-color-scheme: dark)">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap">
+<link rel="stylesheet" href="/styles.css">
+<style>
+.login{max-width:420px;margin:0 auto;padding:12vh 16px 40px;display:grid;gap:16px}
+.login .brand b{font-size:28px}
+.login form{display:grid;gap:10px}
+.login input{border:1px solid var(--line);background:var(--surface);border-radius:10px;padding:10px 12px;font-size:16px;min-height:44px}
+.login .btn{min-height:44px;font-size:16px}
+</style>
+</head>
+<body>
+<main class="login">
+  <div class="brand"><b>Hamiz <span>Pulse</span></b></div>
+  <p class="hint">Sales and Meta Ads for HamizOnline. Enter your work email and we will send you a sign-in link.</p>
+  <div id="msg"></div>
+  <form id="f">
+    <label for="email" class="hint">Email</label>
+    <input id="email" type="email" autocomplete="email" inputmode="email" required>
+    <button class="btn" type="submit">Send sign-in link</button>
+  </form>
+</main>
+<script>
+(function(){
+  const msg=document.getElementById("msg"),f=document.getElementById("f");
+  const show=(t,cls)=>{msg.className="banner"+(cls?" "+cls:"");msg.textContent=t};
+  if(new URLSearchParams(location.search).get("error")==="link")show("That link has expired or was already used. Ask for a new one.","bad");
+  f.onsubmit=async e=>{
+    e.preventDefault();const btn=f.querySelector("button");btn.disabled=true;
+    try{const r=await fetch("/auth/request",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({email:document.getElementById("email").value})});
+      const d=await r.json();show(d.message+" Open it on this phone.")}
+    catch(err){show("Could not reach the server. Try again.","bad")}
+    btn.disabled=false;
+  };
+})();
+</script>
+</body>
+</html>

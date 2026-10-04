@@ -1,0 +1,101 @@
+import xmlrpc.client
+
+import pytest
+from fake_odoo import FakeOdoo
+
+from pulse import odoo, store, sync
+
+
+def test_pull_maps_fields_by_label_preferring_x_fields():
+    fake = FakeOdoo(n=300)
+    logs = []
+    orders, lines, mapping = odoo.pull(fake, days=90, log=logs.append)
+    assert mapping["order"] == {"magento_id": "x_magento_id", "sellers": "x_sellers", "store": "x_store",
+                                "status": "x_order_status", "wilaya": "x_wilaya", "utm_content": "x_utm_content"}
+    assert mapping["line"] == {"seller": "x_seller", "category": "x_category"}
+    assert any("field mapping" in m for m in logs)
+    o = {x["ref"]: x for x in orders}
+    assert o["S00000"]["stage"] == "returned" or o["S00000"]["stage"] == "cancelled"
+    assert o["S00001"]["stage"] == "confirmed"  # Expédiée
+    assert o["S00003"]["sellers"] == ["Mode Tlemcen", "Sport Atlas"]
+    assert o["S00001"]["utm_content"] == "T_lamp_TOFU_demo_v1"
+    assert lines and all(ln["seller"] == "Mode Tlemcen" for ln in lines)
+    assert ("res.partner", "read") in fake.calls  # one batched many2many name lookup
+    assert all(m in odoo.READ_METHODS for _, m in fake.calls)
+
+
+def test_batches_and_pauses():
+    fake = FakeOdoo(n=2500)
+    odoo.pull(fake, days=90, log=lambda *_: None)
+    reads = [c for c in fake.calls if c == ("sale.order", "search_read")]
+    assert len(reads) == 3  # 1000 + 1000 + 500
+    assert fake.sleeps and all(s == 0.3 for s in fake.sleeps)
+
+
+def test_refuses_write_methods():
+    o = odoo.Odoo.__new__(odoo.Odoo)
+    with pytest.raises(odoo.OdooError):
+        o.call("sale.order", "write", [1], {"state": "cancel"})
+
+
+def test_retry_with_exponential_backoff():
+    o = odoo.Odoo.__new__(odoo.Odoo)
+    waits = []
+    o.sleep = waits.append
+    attempts = []
+
+    def flaky():
+        attempts.append(1)
+        if len(attempts) < 4:
+            raise xmlrpc.client.ProtocolError("x", 502, "bad gateway", {})
+        return "ok"
+    assert o._retry(flaky) == "ok"
+    assert waits == [1, 2, 4]
+    attempts.clear()
+    waits.clear()
+
+    def down():
+        raise OSError("down")
+    with pytest.raises(OSError):
+        o._retry(down)
+    assert waits == [1, 2, 4]
+
+
+def test_sync_stores_documents_and_run(db_url):
+    sync.sync_odoo(od=FakeOdoo(n=1200), log=lambda *_: None)
+    docs = store.load_reports()
+    assert set(docs) == {"summary", "sellers", "products", "orders"}
+    assert docs["summary"]["meta"]["example"] is False
+    assert docs["summary"]["meta"]["fields"]["order"]["utm_content"] == "x_utm_content"
+    runs = store.last_runs()
+    assert runs["odoo"]["last"]["ok"] is True and runs["odoo"]["last"]["orders_scanned"] > 0
+    from datetime import date, timedelta
+    att = store.attribution_between(date.today() - timedelta(days=40), date.today() + timedelta(days=1))
+    assert att and any(a["ad"] == "T_lamp_TOFU_demo_v1" for a in att)
+
+
+def test_failed_sync_keeps_last_good_data(db_url):
+    sync.sync_odoo(od=FakeOdoo(n=500), log=lambda *_: None)
+    before = store.load_reports()
+    with pytest.raises(OSError):
+        sync.sync_odoo(od=FakeOdoo(n=500, fail=True), log=lambda *_: None)
+    assert store.load_reports() == before
+    runs = store.last_runs()
+    assert runs["odoo"]["last"]["ok"] is False and "connection refused" in runs["odoo"]["last"]["error"]
+    assert runs["odoo"]["last_ok"]["ok"] is True
+
+
+def test_single_run_lock(db_url):
+    with sync.single_run():
+        with pytest.raises(sync.Busy):
+            with sync.single_run():
+                pass
+    with sync.single_run():  # released
+        pass
+
+
+def test_seed_loads_example_data(db_url):
+    assert sync.seed(log=lambda *_: None) is True
+    docs = store.load_reports()
+    assert docs["summary"]["meta"]["example"] is True
+    assert sync.seed(log=lambda *_: None) is False  # does not overwrite

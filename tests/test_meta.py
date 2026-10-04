@@ -1,0 +1,68 @@
+import json
+
+import httpx
+import pytest
+
+from pulse import meta_ads, store, sync
+
+
+def test_purchases_display_value():
+    assert meta_ads.purchases([{"action_type": "link_click", "value": "40"},
+                               {"action_type": "offsite_conversion.fb_pixel_purchase", "value": "3"}]) == 3
+    assert meta_ads.purchases([{"action_type": "purchase", "value": "5"},
+                               {"action_type": "offsite_conversion.fb_pixel_purchase", "value": "3"}]) == 5
+    assert meta_ads.purchases(None) == 0
+
+
+def test_usage_header():
+    h = {"x-business-use-case-usage": json.dumps({"123": [{"call_count": 12, "total_cputime": 80, "total_time": 3}]})}
+    assert meta_ads.usage_pct(h) == 80
+
+
+def row(ad, day="2026-10-04", spend="12.34"):
+    return {"date_start": day, "date_stop": day, "campaign_id": "c1", "campaign_name": "Lampes", "adset_name": "Testing",
+            "ad_id": ad, "ad_name": f"Ad {ad}", "spend": spend, "impressions": "1000", "clicks": "25",
+            "actions": [{"action_type": "purchase", "value": "2"}]}
+
+
+def test_insights_paginates_and_retries_rate_limits():
+    calls = []
+
+    def handler(req):
+        calls.append(str(req.url))
+        if len(calls) == 1:
+            return httpx.Response(400, json={"error": {"code": 17, "message": "User request limit reached"}})
+        if "after=" not in str(req.url):
+            return httpx.Response(200, json={"data": [row("1")], "paging": {"next": "https://graph.facebook.com/v24.0/act_9/insights?after=abc&access_token=t"}})
+        return httpx.Response(200, json={"data": [row("2", spend="1.00")]})
+    waits = []
+    m = meta_ads.Meta("t", "9", client=httpx.Client(transport=httpx.MockTransport(handler)), sleep=waits.append)
+    rows = m.insights("last_30d")
+    assert [r["ad_id"] for r in rows] == ["1", "2"]
+    assert rows[0]["spend_usd"] == 12.34 and rows[0]["meta_purchases"] == 2 and rows[0]["clicks"] == 25
+    assert waits == [30]
+    assert "level=ad" in calls[1] and "time_increment=1" in calls[1] and "date_preset=last_30d" in calls[1]
+    assert "/act_9/insights" in calls[1]
+
+
+def test_insights_raises_on_auth_error():
+    def handler(req):
+        return httpx.Response(400, json={"error": {"code": 190, "message": "Invalid OAuth access token"}})
+    m = meta_ads.Meta("t", "act_9", client=httpx.Client(transport=httpx.MockTransport(handler)), sleep=lambda s: None)
+    with pytest.raises(meta_ads.MetaError, match="Invalid OAuth"):
+        m.insights("today")
+
+
+class FakeMeta:
+    def insights(self, preset):
+        d = store.now().date().isoformat() if preset == "today" else "2026-09-20"
+        return [meta_ads.normalise(row("1", day=d))]
+
+
+def test_sync_meta_upserts(db_url):
+    sync.sync_meta(client=FakeMeta(), log=lambda *_: None)
+    sync.sync_meta(client=FakeMeta(), log=lambda *_: None)  # second run replaces, no duplicates
+    today = store.now().date()
+    rows = store.spend_between(today, today)
+    assert len(rows) == 1 and rows[0]["ad_name"] == "Ad 1"
+    assert store.last_runs()["meta"]["last"]["ok"] is True
