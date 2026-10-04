@@ -89,6 +89,13 @@ class Meta:
             raise MetaError(f"Meta API {r.status_code}: {err.get('message') or r.text[:300]}")
         raise MetaError("Meta API: retries exhausted")
 
+    def account_info(self):
+        """Currency and time zone of the ad account. Insights report spend in this currency and days in this zone."""
+        url = f"https://graph.facebook.com/{self.version}/{self.account}"
+        d = self._get(url, {"fields": "currency,timezone_name,timezone_offset_hours_utc", "access_token": self.token})
+        return {"currency": d.get("currency"), "timezone_name": d.get("timezone_name"),
+                "timezone_offset_hours_utc": d.get("timezone_offset_hours_utc")}
+
     def insights(self, date_preset):
         """All ad x day rows for a date preset (last_30d, today, yesterday)."""
         url = f"https://graph.facebook.com/{self.version}/{self.account}/insights"

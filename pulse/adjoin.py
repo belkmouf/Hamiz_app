@@ -9,13 +9,20 @@
 Group shape matches web/calc.js: {raw, pending, conf, deliv, val[], approx}.
 """
 from collections import defaultdict
+from urllib.parse import unquote_plus
 
 META_SOURCES = ("fb", "facebook", "ig", "instagram", "meta", "an", "msg", "messenger")
 UNATTRIBUTED = "UNATTRIBUTED"
 
 
 def _norm(s):
+    """Case and spacing insensitive."""
     return " ".join(str(s or "").split()).lower()
+
+
+def _decoded(s):
+    """Magento may save utm_content still URL-encoded ("T_lamp+v1", "T_lamp%20v1")."""
+    return _norm(unquote_plus(str(s or "")))
 
 
 def _is_meta(source):
@@ -47,6 +54,10 @@ def join(spend_rows, orders):
         ad_spend[r["ad_name"]] += float(r["spend_usd"] or 0)
         ad_campaign.setdefault(r["ad_name"], r.get("campaign_name"))
     by_ad_name = {_norm(a): a for a in ad_spend}
+
+    def meta_name(ad):
+        # Exact (case/space-insensitive) first, then the URL-decoded form; unknown names keep their own spelling.
+        return by_ad_name.get(_norm(ad)) or by_ad_name.get(_decoded(ad)) or ad
     campaign_ads = defaultdict(list)
     for a, c in ad_campaign.items():
         campaign_ads[_norm(c)].append(a)
@@ -57,7 +68,7 @@ def join(spend_rows, orders):
     for o in orders:
         ad, camp, src = o.get("ad"), o.get("campaign"), o.get("source")
         if ad:
-            _add(groups[by_ad_name.get(_norm(ad), ad)], o)  # keep Meta's spelling when the names match
+            _add(groups[meta_name(ad)], o)
         elif camp and _norm(camp) in campaign_ads:
             campaign_orders[_norm(camp)].append(o)
         elif not (ad or camp or src):

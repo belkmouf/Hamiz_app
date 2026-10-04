@@ -106,6 +106,7 @@ def api_ads(window: str = Query("today", pattern="^(today|yesterday|last7)$"), _
     spend_rows = store.spend_between(start, end)
     orders = store.attribution_between(start, end)
     spend, groups, other, members = join(spend_rows, orders)
+    account = store.load_reports().get("meta_account") or {}
     first = store.first_spend_dates()
     days_running = {}
     for name in set(spend) | set(groups):
@@ -120,6 +121,8 @@ def api_ads(window: str = Query("today", pattern="^(today|yesterday|last7)$"), _
         "spend": {k: round(v, 2) for k, v in spend.items()}, "groups": groups,
         "days_running": days_running, "other_channels": other,
         "has_spend": bool(spend_rows), "has_orders": bool(orders),
+        "currency": account.get("currency"), "timezone_name": account.get("timezone_name"),
+        "timezone_offset_hours_utc": account.get("timezone_offset_hours_utc"),
         "sync": sync_status(),
     }
 

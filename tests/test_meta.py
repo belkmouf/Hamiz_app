@@ -54,6 +54,13 @@ def test_insights_raises_on_auth_error():
 
 
 class FakeMeta:
+    def __init__(self, currency="USD", tz=1):
+        self.currency, self.tz = currency, tz
+
+    def account_info(self):
+        return {"currency": self.currency, "timezone_name": "Africa/Algiers" if self.tz == 1 else "America/Los_Angeles",
+                "timezone_offset_hours_utc": self.tz}
+
     def insights(self, preset):
         d = store.now().date().isoformat() if preset == "today" else "2026-09-20"
         return [meta_ads.normalise(row("1", day=d))]
@@ -66,3 +73,22 @@ def test_sync_meta_upserts(db_url):
     rows = store.spend_between(today, today)
     assert len(rows) == 1 and rows[0]["ad_name"] == "Ad 1"
     assert store.last_runs()["meta"]["last"]["ok"] is True
+
+
+def test_sync_meta_records_account_currency_and_timezone(db_url):
+    logs = []
+    sync.sync_meta(client=FakeMeta(currency="DZD", tz=-7), log=logs.append)
+    acc = store.load_reports()["meta_account"]
+    assert acc["currency"] == "DZD" and acc["timezone_offset_hours_utc"] == -7
+    assert any("currency is DZD" in m for m in logs) and any("time zone" in m for m in logs)
+
+
+def test_account_info_request():
+    seen = []
+
+    def handler(req):
+        seen.append(req.url)
+        return httpx.Response(200, json={"currency": "USD", "timezone_name": "Africa/Algiers", "timezone_offset_hours_utc": 1, "id": "act_9"})
+    m = meta_ads.Meta("t", "9", client=httpx.Client(transport=httpx.MockTransport(handler)), sleep=lambda s: None)
+    assert m.account_info()["currency"] == "USD"
+    assert seen[0].path.endswith("/act_9") and "currency" in seen[0].params["fields"]

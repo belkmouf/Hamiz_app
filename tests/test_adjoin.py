@@ -44,3 +44,8 @@ def test_campaign_only_orders_are_unattributed_when_campaign_tracks_ads():
 def test_meta_source_without_match_is_unattributed():
     _, groups, other, _ = join([sp("A", 5)], [od("pending", source="fb", campaign="Old campaign")])
     assert groups[UNATTRIBUTED]["raw"] == 1 and other == 0
+
+
+def test_url_encoded_utm_content_matches():
+    spend, groups, _, _ = join([sp("Bundle 2+1 v1", 4)], [od("confirmed", ad="Bundle+2%2B1+v1"), od("confirmed", ad="bundle 2+1 v1")])
+    assert groups["Bundle 2+1 v1"]["raw"] == 2 and UNATTRIBUTED not in groups

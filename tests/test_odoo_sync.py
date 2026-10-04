@@ -1,4 +1,5 @@
 import xmlrpc.client
+from datetime import timedelta
 
 import pytest
 from fake_odoo import FakeOdoo
@@ -99,3 +100,33 @@ def test_seed_loads_example_data(db_url):
     docs = store.load_reports()
     assert docs["summary"]["meta"]["example"] is True
     assert sync.seed(log=lambda *_: None) is False  # does not overwrite
+
+
+def test_status_never_maps_to_odoo_state_field():
+    """Odoo's own `state` field is labelled "Status": it must not be taken as the Magento status."""
+    orders, _, mapping = odoo.pull(FakeOdoo(n=50, no_custom_status=True), log=lambda *_: None)
+    assert "status" not in mapping["order"]
+    assert {o["stage"] for o in orders} <= {"confirmed", "cancelled"}  # from state alone
+
+
+def test_section_note_and_delivery_lines_left_out():
+    _, lines, mapping = odoo.pull(FakeOdoo(n=100), log=lambda *_: None)
+    assert all(ln["product"] == "Lampe LED" for ln in lines)
+    assert mapping["lines_skipped"]["delivery_fee"] > 0 and mapping["lines_skipped"]["section_or_note"] > 0
+
+
+def test_date_order_moved_on_confirmation_is_reported_and_switchable(monkeypatch):
+    logs = []
+    fake = FakeOdoo(n=200, confirm_delay_hours=5)
+    orders, _, mapping = odoo.pull(fake, log=logs.append)
+    assert mapping["date"]["date_order_after_create_1h"] > 100
+    assert any("PULSE_ORDER_DATE_FIELD" in m for m in logs)
+    by_date_order = {o["ref"]: o["dt"] for o in orders}
+    monkeypatch.setenv("PULSE_ORDER_DATE_FIELD", "create_date")
+    orders2, _, mapping2 = odoo.pull(fake, log=lambda *_: None)
+    assert mapping2["date"]["field"] == "create_date"
+    o = next(x for x in orders2 if fake.orders[int(x["ref"][1:])]["state"] == "sale")
+    assert by_date_order[o["ref"]] - o["dt"] == timedelta(hours=5)
+    monkeypatch.setenv("PULSE_ORDER_DATE_FIELD", "x_store")
+    with pytest.raises(odoo.OdooError):
+        odoo.pull(fake, log=lambda *_: None)

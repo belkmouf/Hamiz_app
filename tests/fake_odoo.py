@@ -19,6 +19,7 @@ ORDER_FIELDS = {
     "x_store": {"string": "Store Based ID", "type": "char"},
     "x_wilaya": {"string": "Wilaya", "type": "char"},
     "x_utm_content": {"string": "UTM Content", "type": "char"},
+    "create_date": {"string": "Created on", "type": "datetime"},
 }
 LINE_FIELDS = {
     "order_id": {"string": "Order", "type": "many2one"},
@@ -27,6 +28,8 @@ LINE_FIELDS = {
     "price_total": {"string": "Total", "type": "monetary"},
     "x_seller": {"string": "Seller", "type": "many2one"},
     "x_category": {"string": "Product Category", "type": "char"},
+    "display_type": {"string": "Display Type", "type": "selection"},
+    "is_delivery": {"string": "Is a Delivery", "type": "boolean"},
 }
 
 
@@ -36,7 +39,7 @@ def utc(days_ago, hour=12):
 
 
 class FakeOdoo:
-    def __init__(self, n=2500, fail=False):
+    def __init__(self, n=2500, fail=False, confirm_delay_hours=0, no_custom_status=False):
         self.calls = []
         self.fail = fail
         self.sleeps = []
@@ -51,6 +54,15 @@ class FakeOdoo:
                 "x_order_status": statuses[i % len(statuses)], "x_sellers": [101, 102] if i % 3 == 0 else [101],
                 "x_store": "Hamiz Web", "x_wilaya": "Alger", "x_utm_content": "T_lamp_TOFU_demo_v1" if i % 4 == 1 else False,
             })
+            o = self.orders[-1]
+            o["create_date"] = o["date_order"]
+            if confirm_delay_hours and o["state"] == "sale":
+                o["date_order"] = (datetime.strptime(o["date_order"], "%Y-%m-%d %H:%M:%S")
+                                   + timedelta(hours=confirm_delay_hours)).strftime("%Y-%m-%d %H:%M:%S")
+        self.order_fields = dict(ORDER_FIELDS)
+        if no_custom_status:
+            del self.order_fields["x_order_status"]
+            del self.order_fields["magento_status_std"]
 
     def sleep(self, s):
         self.sleeps.append(s)
@@ -60,20 +72,32 @@ class FakeOdoo:
         if self.fail:
             raise OSError("connection refused")
         if method == "fields_get":
-            return ORDER_FIELDS if model == "sale.order" else LINE_FIELDS
+            return self.order_fields if model == "sale.order" else LINE_FIELDS
         if method == "read":
             return [{"id": i, "display_name": {101: "Mode Tlemcen", 102: "Sport Atlas"}[i]} for i in args[0]]
         if method == "search_read":
             domain = args[0]
             offset, limit = kw.get("offset", 0), kw.get("limit", 1000)
             if model == "sale.order":
-                since = domain[0][2]
-                rows = [{k: o[k] for k in kw["fields"]} | {"id": o["id"]} for o in self.orders if o["date_order"] >= since]
+                fld, _, since = domain[0]
+                rows = [{k: o[k] for k in kw["fields"]} | {"id": o["id"]} for o in self.orders if o[fld] >= since]
                 return rows[offset:offset + limit]
             ids = set(domain[0][2])
-            rows = [{"order_id": [o["id"], o["name"]], "product_id": [7, "Lampe LED"], "product_uom_qty": 1.0,
-                     "price_total": 4500.0, "x_seller": [101, "Mode Tlemcen"], "x_category": "Maison"}
-                    for o in self.orders if o["id"] in ids]
+            rows = []
+            for o in self.orders:
+                if o["id"] not in ids:
+                    continue
+                rows.append({"order_id": [o["id"], o["name"]], "product_id": [7, "Lampe LED"], "product_uom_qty": 1.0,
+                             "price_total": 4500.0, "x_seller": [101, "Mode Tlemcen"], "x_category": "Maison",
+                             "display_type": False, "is_delivery": False})
+                if o["id"] % 5 == 0:
+                    rows.append({"order_id": [o["id"], o["name"]], "product_id": [8, "Livraison"], "product_uom_qty": 1.0,
+                                 "price_total": 400.0, "x_seller": False, "x_category": False,
+                                 "display_type": False, "is_delivery": True})
+                    rows.append({"order_id": [o["id"], o["name"]], "product_id": False, "product_uom_qty": 0.0,
+                                 "price_total": 0.0, "x_seller": False, "x_category": False,
+                                 "display_type": "line_note", "is_delivery": False})
+            rows = [{k: r[k] for k in ["order_id"] + kw["fields"] if k in r} for r in rows]
             return rows[offset:offset + limit]
         raise AssertionError(method)
 

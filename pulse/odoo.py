@@ -84,12 +84,13 @@ class Odoo:
         return res
 
 
-def pick(fields, wanted, prefer_custom=True):
-    """Map logical keys to real field names using the field labels, preferring x_ fields."""
+def pick(fields, wanted, prefer_custom=True, exclude=()):
+    """Map logical keys to real field names using the field labels, preferring x_ fields.
+    Fields in `exclude` never match (e.g. Odoo's own `state`, whose label is also "Status")."""
     found = {}
     for key, labels in wanted.items():
         for lab in labels:
-            hits = [n for n, f in fields.items() if (f.get("string") or "").strip().lower() == lab]
+            hits = [n for n, f in fields.items() if n not in exclude and (f.get("string") or "").strip().lower() == lab]
             if prefer_custom:
                 hits.sort(key=lambda n: (not n.startswith("x_"), n))
             if hits:
@@ -114,15 +115,33 @@ def connect():
 def pull(od, days=90, log=print):
     """Return (orders, lines, mapping) normalised for pulse.aggregate."""
     of = od.fields("sale.order")
-    omap = pick(of, order_labels())
+    omap = pick(of, order_labels(), exclude=set(ORDER_STD) | {"create_date", "write_date"})
     if omap.get("wilaya") and of[omap["wilaya"]]["type"] not in ("many2one", "char", "selection"):
         omap.pop("wilaya")
     if omap.get("utm_content") and of[omap["utm_content"]]["type"] not in ("many2one", "char", "selection"):
         omap.pop("utm_content")
     log("sale.order field mapping: " + (", ".join(f"{k}={v}" for k, v in sorted(omap.items())) or "(none)"))
-    ofields = [f for f in ORDER_STD if f in of] + sorted(set(omap.values()))
+    # Odoo moves date_order to the confirmation time when a quotation is confirmed. PULSE_ORDER_DATE_FIELD
+    # can switch "placed" time to create_date (or a custom Magento date field) if the check below shows that.
+    date_field = env("PULSE_ORDER_DATE_FIELD", "date_order")
+    if date_field not in of or of[date_field]["type"] != "datetime":
+        raise OdooError(f"PULSE_ORDER_DATE_FIELD={date_field!r} is not a datetime field on sale.order")
+    extra = [f for f in ("create_date", date_field) if f in of and f not in ORDER_STD]
+    ofields = [f for f in ORDER_STD if f in of] + sorted(set(omap.values()) | set(extra))
     since = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
-    raw = od.search_read("sale.order", [["date_order", ">=", since]], ofields, order="date_order asc")
+    raw = od.search_read("sale.order", [[date_field, ">=", since]], ofields, order=f"{date_field} asc")
+    raw = [r for r in raw if r.get(date_field)]
+    date_check = {"field": date_field, "orders": len(raw), "date_order_after_create_1h": None}
+    if "create_date" in of:
+        late = 0
+        for r in raw:
+            if r.get("date_order") and r.get("create_date") and \
+                    to_local(r["date_order"]) - to_local(r["create_date"]) > timedelta(hours=1):
+                late += 1
+        date_check["date_order_after_create_1h"] = late
+        if date_field == "date_order" and raw and late / len(raw) > 0.05:
+            log(f"WARNING: {late} of {len(raw)} orders have date_order more than 1 h after create_date "
+                "(Odoo moves date_order on confirmation). Consider PULSE_ORDER_DATE_FIELD=create_date.")
 
     sellers_field = omap.get("sellers")
     seller_names = {}
@@ -148,7 +167,7 @@ def pull(od, days=90, log=print):
         s = val(r, "sellers")
         orders.append({
             "id": r["id"], "ref": r["name"], "magento": val(r, "magento_id"),
-            "dt": to_local(r["date_order"]), "total": float(r.get("amount_total") or 0),
+            "dt": to_local(r[date_field]), "total": float(r.get("amount_total") or 0),
             "stage": classify(r.get("state"), status_raw if isinstance(status_raw, str) else None),
             "status_raw": status_raw if isinstance(status_raw, str) else r.get("state"),
             "customer": m2o(r.get("partner_id")), "salesperson": m2o(r.get("user_id")),
@@ -163,12 +182,20 @@ def pull(od, days=90, log=print):
     cutoff = datetime.now(DZ) - timedelta(days=30)
     recent_ids = [o["id"] for o in orders if o["dt"] >= cutoff]
     id_ref = {o["id"]: o["ref"] for o in orders}
-    lfields = ["order_id", "product_id", "product_uom_qty", "price_total"] + sorted(set(lmap.values()))
+    flags = [f for f in ("display_type", "is_delivery") if f in lf]
+    lfields = ["order_id", "product_id", "product_uom_qty", "price_total"] + flags + sorted(set(lmap.values()))
     lines = []
+    skipped = {"section_or_note": 0, "delivery_fee": 0}
     for i in range(0, len(recent_ids), BATCH):
         if i:
             od.sleep(PAUSE)
         for ln in od.search_read("sale.order.line", [["order_id", "in", recent_ids[i:i + BATCH]]], lfields):
+            if ln.get("display_type"):  # section and note lines carry no product or amount
+                skipped["section_or_note"] += 1
+                continue
+            if ln.get("is_delivery"):  # shipping charged to the customer is not a product or a seller's sale
+                skipped["delivery_fee"] += 1
+                continue
             oid = ln["order_id"][0] if ln.get("order_id") else None
 
             def lval(key):
@@ -177,5 +204,5 @@ def pull(od, days=90, log=print):
             lines.append({"order_ref": id_ref.get(oid), "product": m2o(ln.get("product_id")),
                           "qty": float(ln.get("product_uom_qty") or 0), "amount": float(ln.get("price_total") or 0),
                           "seller": lval("seller"), "category": lval("category")})
-    mapping = {"order": omap, "line": lmap}
+    mapping = {"order": omap, "line": lmap, "date": date_check, "lines_skipped": skipped}
     return orders, lines, mapping

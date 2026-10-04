@@ -86,9 +86,24 @@ function render(){
   const fn={overview,trend,sellers:()=>ranked("sellers"),products:()=>ranked("products"),channels,orders,budget,plan,review}[t]||overview;
   try{h+=fn()}catch(e){h+=`<section class="card"><p class="hint">This tab could not render: ${esc(e.message)}</p></section>`}
   const m=meta();
+  if(m&&m.fields&&!m.example)h+=dataChecks(m);
   h+=`<div class="foot">${m?`<span>Odoo data from ${esc(m.generated_at.replace("T"," ").slice(0,16))} Algiers</span>`:""}<button data-logout="1">Sign out</button></div>`;
   main.innerHTML=h;
   bind();
+}
+function dataChecks(m){
+  const f=m.fields||{},o=f.order||{},l=f.line||{},dc=f.date||{},sk=f.lines_skipped||{};
+  const need=[["status","Order status"],["sellers","Sellers"],["store","Store"],["magento_id","Magento ID"],["utm_content","UTM content (ad name)"],["wilaya","Wilaya"]];
+  const missing=need.filter(([k])=>!o[k]).map(x=>x[1]);
+  const late=dc.date_order_after_create_1h,share=dc.orders?late/dc.orders:0;
+  let warn=missing.length?`<p class="hint" style="color:var(--warn)">Not found in Odoo: ${esc(missing.join(", "))}.</p>`:"";
+  if(dc.field==="date_order"&&share>.05)warn+=`<p class="hint" style="color:var(--warn)">${fmt(late)} of ${fmt(dc.orders)} orders have an Odoo order date more than 1 h after they were created (Odoo moves it on confirmation). Days and hours may show confirmation time, not order time.</p>`;
+  return`<details class="card" style="padding:12px 14px"${warn?" open":""}><summary class="hint" style="cursor:pointer;min-height:24px">Odoo field mapping and data checks</summary>
+    <div class="list" style="margin-top:8px">${Object.entries(o).map(([k,v])=>`<div class="kv"><span>${esc(k)}</span><span class="mono">${esc(v)}</span></div>`).join("")}
+    ${Object.entries(l).map(([k,v])=>`<div class="kv"><span>line ${esc(k)}</span><span class="mono">${esc(v)}</span></div>`).join("")}
+    <div class="kv"><span>Order date field</span><span class="mono">${esc(dc.field||"date_order")}</span></div>
+    <div class="kv"><span>Orders / lines scanned</span><span>${fmt(m.orders_scanned)} / ${fmt(m.lines_scanned)}</span></div>
+    ${sk.delivery_fee||sk.section_or_note?`<div class="kv"><span>Lines left out</span><span>${fmt(sk.delivery_fee||0)} delivery fee · ${fmt(sk.section_or_note||0)} section/note</span></div>`:""}</div>${warn}</details>`;
 }
 function noData(k){return !S.data[k]?`<section class="card"><div class="empty">${S.net==="off"?"Live Odoo data shows here once the server is reachable.":S.net==="wait"?"Loading…":"Waiting for the first Odoo sync. Data appears automatically."}</div></section>`:null}
 
@@ -103,7 +118,7 @@ function delta(cur,prev,inverse){
 function overview(){
   const e=noData("summary");if(e)return e;
   const s=S.data.summary,p=PERIODS.find(x=>x[0]===S.period)||PERIODS[2],k=s.kpis[p[0]],pv=p[2]?s.kpis[p[2]]:null;
-  const ppdRate=s.kpis.last7.orders_per_day,low=+S.ads.low,high=+S.ads.high,scaleMax=Math.max(high*1.2,ppdRate*1.1);
+  const ppdRate=fullDaysRate(s,7)??s.kpis.last7.orders_per_day,low=+S.ads.low,high=+S.ads.high,scaleMax=Math.max(high*1.2,ppdRate*1.1);
   const st=k.stages||{},tot=k.orders||1;
   let h=`<div class="chips" role="group" aria-label="Period">${PERIODS.map(x=>`<button class="chip" data-period="${x[0]}" aria-pressed="${x[0]===p[0]}">${x[1]}</button>`).join("")}</div>`;
   h+=`<div class="kpis">
@@ -116,7 +131,7 @@ function overview(){
   </div>`;
   if(pv)h+=`<p class="hint" style="margin-top:-4px">Changes are ${p[3]}.</p>`;
   h+=`<section class="card"><h2>Daily orders goal <small>${low}–${high} placed/day</small></h2>
-    <div class="gauge"><div class="row2"><span><span class="big">${fmt(ppdRate,1)}</span> / day, last 7 days</span><span class="pill ${ppdRate>=low?"p-good":ppdRate>=low*.6?"p-warn":"p-bad"}">${ppdRate>=low?"On target":fmt(low-ppdRate,0)+" short"}</span></div>
+    <div class="gauge"><div class="row2"><span><span class="big">${fmt(ppdRate,1)}</span> / day, last 7 full days</span><span class="pill ${ppdRate>=low?"p-good":ppdRate>=low*.6?"p-warn":"p-bad"}">${ppdRate>=low?"On target":fmt(low-ppdRate,0)+" short"}</span></div>
     <div class="track"><i class="fill" style="width:${Math.min(100,ppdRate/scaleMax*100)}%"></i><i class="band" style="left:${low/scaleMax*100}%;width:${(high-low)/scaleMax*100}%"></i></div>
     <div class="row2"><span>0</span><span>Target band ${low}–${high}</span><span>${fmt(scaleMax,0)}</span></div></div></section>`;
   h+=`<section class="card"><h2>Order status <small>${fmt(k.orders)} orders</small></h2>
@@ -130,6 +145,8 @@ function overview(){
   h+=`<section class="card"><h2>When orders arrive <small>last 30 days, Algiers time</small></h2>${hourChart(s.hours)}<p class="hint">Use the peak hours to plan ad budget and confirmation-call shifts.</p></section>`;
   return h;
 }
+/* Orders/day over the last n COMPLETE days (today's partial day left out), from the daily rows. */
+function fullDaysRate(s,n){const rows=(s.daily||[]).slice(0,-1).slice(-n);return rows.length?rows.reduce((a,r)=>a+r.o,0)/rows.length:null}
 function kpi(l,v,d){return`<div class="kpi"><span class="l">${l}</span><span class="v">${v}</span>${d||'<span class="d flat">&nbsp;</span>'}</div>`}
 function hourChart(hours){
   const W=340,H=120,max=Math.max(1,...hours),bw=W/24;
@@ -256,7 +273,7 @@ function budget(){
     <div class="stat"><div class="l">Per delivered</div><div class="v">${usd(perDeliv/I.fx)}</div><div class="u">${fmt(perDeliv)} DA</div></div></div>
     ${I.basis!=="delivered"?`<p class="hint">Real cost per delivered order: ${fmt(perDeliv)} DA, or ${pct(perDeliv/I.aov)} of order value.</p>`:""}</section>`;
   h+=`<section class="card"><h2>Daily ad budget at your goal</h2><div class="list">${B.daily.map(v=>`<div class="item"><span class="n">${fmt(v.placed)} placed/day</span><span class="r">${usd(v.spend/I.fx,0)}/day</span><span class="s">~${fmt(v.conf)} confirmed · ~${fmt(v.deliv)} delivered · ${da(v.spend)}</span></div>`).join("")}</div>`;
-  if(k)h+=`<p class="hint">Right now: ${fmt(k.orders_per_day,1)} orders/day over the last 30 days.</p>`;
+  if(k){const r30=fullDaysRate(S.data.summary,30);h+=`<p class="hint">Right now: ${fmt(r30??k.orders_per_day,1)} orders placed/day over the last 30 full days.</p>`}
   h+=`</section>`;
   const raw=perRaw/I.fx,cpms=String(A.cpm).split(",").map(Number).filter(x=>x>0),ctrs=String(A.ctr).split(",").map(Number).filter(x=>x>0);
   h+=`<section class="card"><h2>Landing conversion needed <small>Meta CPA ≤ ${usd(raw)}</small></h2>
@@ -315,7 +332,13 @@ function reviewLive(I){
   const ms=d.sync&&d.sync.meta,last=ms&&ms.last;
   let note=last?`Meta synced ${esc(ageText(_ago(last.finished_at)))}${last.ok===false?` · <b style="color:var(--bad)">last Meta sync failed</b>`:""}`:"Meta has not synced yet";
   if(!d.has_spend&&!d.has_orders)return h+`<section class="card"><div class="empty">No Meta spend or attributed orders for ${esc(d.start)}${d.end!==d.start?" to "+esc(d.end):""}.<br><span class="hint">${note}</span></div></section>`;
-  const res=C.review(d.spend,d.groups,I,d.days_running);
+  let spend=d.spend,warn="";
+  if(d.currency&&d.currency!=="USD"){
+    if(d.currency==="DZD"){spend=Object.fromEntries(Object.entries(d.spend).map(([k,v])=>[k,v/I.fx]));warn=`The ad account bills in DZD; spend is converted to USD at your ${fmt(I.fx)} DA per $1.`}
+    else warn=`<b>The ad account bills in ${esc(d.currency)}, not USD.</b> Spend below is in ${esc(d.currency)}, so CAC is wrong until the FX setting is the DA paid per 1 ${esc(d.currency)}.`}
+  if(d.timezone_offset_hours_utc!=null&&+d.timezone_offset_hours_utc!==1)warn+=`${warn?"<br>":""}<b>The ad account's time zone is ${esc(d.timezone_name)}.</b> Meta days do not line up with Algiers days, so per-day spend and orders are offset.`;
+  if(warn)h+=`<div class="banner warn">${warn}</div>`;
+  const res=C.review(spend,d.groups,I,d.days_running);
   h+=account(res,I,`${esc(d.start)}${d.end!==d.start?" → "+esc(d.end):""}`);
   h+=adList(res,true);
   h+=`<p class="hint">${note}. Orders are joined on utm_content = ad name${d.other_channels?`; ${fmt(d.other_channels)} orders from other channels are left out`:""}. Kills for CAC or no orders wait until an ad has run 3 full days.</p>`;

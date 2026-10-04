@@ -90,8 +90,14 @@ def sync_meta(url=None, client=None, log=print):
     run = store.start_run("meta", url)
     try:
         client = client or meta_ads.connect()
+        account = client.account_info()
         rows = client.insights("last_30d") + client.insights("today")
         store.save_meta_spend(rows, url)
+        store.save_reports({"meta_account": {**account, "checked_at": store.now().isoformat(timespec="minutes")}}, None, url)
+        if account.get("currency") != "USD":
+            log(f"WARNING: ad account currency is {account.get('currency')}, not USD; the app converts DZD with the FX setting")
+        if account.get("timezone_offset_hours_utc") not in (None, 1, 1.0):
+            log(f"WARNING: ad account time zone is {account.get('timezone_name')}; Meta days will not line up with Algiers days")
         store.prune_meta_spend(store.now().date() - timedelta(days=35), url)
         log(f"meta: {len(rows)} ad-day rows, ${sum(r['spend_usd'] for r in rows):,.2f} spend")
         store.finish_run(run, True, url=url)

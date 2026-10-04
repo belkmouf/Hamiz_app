@@ -64,7 +64,7 @@ All three need a session. Sessions last 30 days, and removing an email from `APP
 ## Tests
 
 ```bash
-pytest                      # 80 tests; the layout test needs Playwright + Chromium and is skipped otherwise
+pytest                      # 86 tests; the layout test needs Playwright + Chromium and is skipped otherwise
 ```
 
 These cover the PRD §14 acceptance tests:
@@ -84,6 +84,17 @@ Also covered: login (single-use and expiring links, no hint about which emails a
 - **Live Ad review enforces the 3-day rule.** It uses each ad's first day of spend in Meta. A CAC kill or no-order kill before 3 full days shows as "Wait: under 3 full days (would kill: …)". Junk-order kills (10+ resolved orders, under 50% confirmed) still show right away. Upload mode keeps the on-screen note instead.
 - **Orders from other channels are left out of live Ad review.** These are orders whose UTM source is not Meta (Google, SMS, …). Orders with no UTM at all are UNATTRIBUTED, as the PRD says.
 - **Per-ad scoring needs a `utm_content` field on Odoo orders.** The sync looks for a field labeled "UTM Content" or "Ad name". Until one exists, live Ad review can only match by campaign. See PRD §12, question 1.
+
+## Data checks with real systems
+
+These guard against cases where the math is right but the inputs mislead. The sync logs each one, and the app's **"Odoo field mapping and data checks"** panel (bottom of every tab) opens by itself when something needs attention.
+
+- **Order date.** When a quotation is confirmed, Odoo resets `date_order` to the confirmation time. The sync counts orders whose `date_order` is more than 1 h after `create_date` and warns when that's over 5%. If it is, set `PULSE_ORDER_DATE_FIELD=create_date` (or a custom Magento date field) so days and hours show when the customer actually ordered.
+- **Status field.** Odoo's built-in `state` field is also labelled "Status", so it's excluded from label matching. If no custom status field is found, stages come from `state` alone, and the panel lists the status field as not found.
+- **Order lines.** Section and note lines, and delivery-fee lines (`is_delivery`), are left out of Products and Sellers. The panel shows how many were skipped. GMV still uses the order total.
+- **Meta account.** Each sync records the ad account's currency and time zone. A DZD account is converted to USD with your FX setting. Any other currency, or a time zone other than UTC+1, shows a warning on Ad review.
+- **Ad names.** The join to Odoo orders ignores case and extra spaces, and also accepts a `utm_content` that Magento saved still URL-encoded.
+- **Daily goal.** The goal gauge and the "orders/day right now" line use complete days only, so today's partial day doesn't drag the number down. The 7-day and 30-day KPI tiles follow the PRD windows, which include today.
 
 ## Open items (PRD §12)
 
