@@ -13,12 +13,17 @@ envVarGroups:
       - {key: META_ACCESS_TOKEN, sync: false}
       - {key: META_AD_ACCOUNT_ID, sync: false}
       - {key: APP_ALLOWED_EMAILS, sync: false}
+      - {key: APP_ADMIN_EMAIL, sync: false}
+      - {key: APP_ADMIN_PASSWORD, sync: false}
       - {key: APP_SECRET_KEY, generateValue: true}
+      - {key: META_API_VERSION, value: v24.0}
+      - {key: PULSE_FX, value: "250"}
 
 services:
   - type: web
     name: hamiz-pulse
     runtime: docker
+    plan: starter
     healthCheckPath: /healthz
     envVars:
       - fromGroup: hamiz-pulse-secrets
@@ -26,6 +31,7 @@ services:
       - {key: PULSE_FORCE_HTTPS, value: "1"}
       - {key: APP_BASE_URL, sync: false}
       - {key: SMTP_HOST, sync: false}
+      - {key: SMTP_PORT, value: "587"}
       - {key: SMTP_USER, sync: false}
       - {key: SMTP_PASSWORD, sync: false}
       - {key: SMTP_FROM, sync: false}
@@ -33,7 +39,8 @@ services:
   - type: cron
     name: hamiz-pulse-sync
     runtime: docker
-    schedule: "7 * * * *"   # hourly, off the top of the hour
+    plan: starter
+    schedule: "7 * * * *"   # hourly, off the top of the hour (UTC)
     dockerCommand: python -m pulse.sync
     envVars:
       - fromGroup: hamiz-pulse-secrets

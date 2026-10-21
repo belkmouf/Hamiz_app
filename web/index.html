@@ -1,37 +1,50 @@
 <!doctype html>
-<html lang="en">
+<html lang="fr" dir="ltr">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Hamiz Pulse</title>
 <meta name="description" content="HamizOnline sales and Meta Ads performance">
-<meta name="theme-color" content="#f6f3f0" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#131110" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#E30613">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Pulse">
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600&family=Noto+Sans+Arabic:wght@400;600;700&display=swap">
 <link rel="stylesheet" href="/styles.css">
+<script>
+try{
+  var l=JSON.parse(localStorage.getItem("hp.lang")||'"fr"');
+  if(["fr","ar","en"].indexOf(l)<0)l="fr";
+  document.documentElement.lang=l==="ar"?"ar":l;
+  document.documentElement.dir=l==="ar"?"rtl":"ltr";
+}catch(e){document.documentElement.lang="fr";}
+</script>
 </head>
 <body>
 <header class="top">
   <div class="bar">
-    <div class="brand"><b>Hamiz <span>Pulse</span></b></div>
-    <div class="sync" id="sync" role="status" aria-live="polite"><i class="dot" id="syncDot"></i><span id="syncText">Connecting…</span></div>
+    <div class="brand"><svg class="mark" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8" fill="#E30613"/><path d="M10 13h12l-1.2 10.2a2 2 0 0 1-2 1.8h-5.6a2 2 0 0 1-2-1.8z" fill="#FF0050"/><path d="M12.5 13c0-2.5 1.6-4.2 3.5-4.2s3.5 1.7 3.5 4.2" fill="none" stroke="#fff" stroke-width="1.6" stroke-linecap="round"/></svg><b>Hamiz <span>Pulse</span></b></div>
+    <div class="lang" id="langs" role="group"></div>
+    <button id="refreshBtn" type="button" aria-label="Refresh">↻</button>
+  </div>
+  <div class="bar sub">
+    <div class="sync" id="sync" role="status" aria-live="polite"><i class="dot" id="syncDot"></i><span id="syncText">…</span></div>
     <div class="seg" role="group" aria-label="Section">
-      <button id="secSales" aria-pressed="true">Sales</button>
-      <button id="secAds" aria-pressed="false">Ads</button>
+      <button id="secSales" type="button" aria-pressed="true">Sales</button>
+      <button id="secAds" type="button" aria-pressed="false">Ads</button>
     </div>
   </div>
   <nav class="tabs" id="tabs" role="tablist" aria-label="Tabs"></nav>
 </header>
-<main id="main"><div class="empty">Loading the latest Odoo sync…</div></main>
+<div id="ptr" hidden></div>
+<main id="main"></main>
+<script src="/i18n.js"></script>
 <script src="/calc.js"></script>
 <script src="/app.js"></script>
 </body>

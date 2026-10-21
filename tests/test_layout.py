@@ -53,7 +53,7 @@ def test_no_horizontal_scroll_at_375(server, scheme):
     problems = []
     with pw.sync_playwright() as p:
         browser = p.chromium.launch()
-        ctx = browser.new_context(viewport={"width": 375, "height": 800}, color_scheme=scheme, device_scale_factor=2,
+        ctx = browser.new_context(viewport={"width": 375, "height": 812}, color_scheme=scheme, device_scale_factor=2,
                                   service_workers="block")
         ctx.add_cookies([{"name": "hp_session", "value": cookie, "url": base}])
         page = ctx.new_page()

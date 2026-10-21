@@ -96,11 +96,16 @@ class Meta:
         return {"currency": d.get("currency"), "timezone_name": d.get("timezone_name"),
                 "timezone_offset_hours_utc": d.get("timezone_offset_hours_utc")}
 
-    def insights(self, date_preset):
-        """All ad x day rows for a date preset (last_30d, today, yesterday)."""
+    def insights(self, date_preset=None, since=None, until=None):
+        """Ad x day rows. `since`/`until` are YYYY-MM-DD (Meta account time zone). Else a date_preset."""
         url = f"https://graph.facebook.com/{self.version}/{self.account}/insights"
-        params = {"level": "ad", "time_increment": 1, "date_preset": date_preset, "fields": FIELDS,
-                  "limit": 500, "access_token": self.token}
+        params = {"level": "ad", "time_increment": 1, "fields": FIELDS, "limit": 500, "access_token": self.token}
+        if since and until:
+            params["time_range"] = json.dumps({"since": since, "until": until})
+        elif date_preset:
+            params["date_preset"] = date_preset
+        else:
+            raise MetaError("insights needs a date_preset or a since/until range")
         rows = []
         while url:
             data = self._get(url, params)

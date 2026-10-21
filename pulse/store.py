@@ -6,6 +6,7 @@ Tables
   order_attribution  one row per Odoo order of the last 30 days, with its utm_content (ad name)
   sync_runs          one row per sync attempt
   used_login_tokens  magic-link nonces already spent (single use)
+  staff              employee accounts (hashed passwords, admin or staff)
 """
 from contextlib import contextmanager
 from datetime import datetime
@@ -46,6 +47,7 @@ order_attribution = sa.Table(
     sa.Column("source", sa.Text),
     sa.Column("stage", sa.String(16), nullable=False),
     sa.Column("total", sa.Float, nullable=False),
+    sa.Column("goods", sa.Float),  # merchandise DZD, delivery fees excluded
 )
 sync_runs = sa.Table(
     "sync_runs", md,
@@ -62,16 +64,43 @@ used_login_tokens = sa.Table(
     sa.Column("nonce", sa.String(64), primary_key=True),
     sa.Column("used_at", sa.DateTime(timezone=True), nullable=False),
 )
+staff = sa.Table(
+    "staff", md,
+    sa.Column("email", sa.String(255), primary_key=True),
+    sa.Column("name", sa.String(120), nullable=False, default=""),
+    sa.Column("password_hash", sa.Text),
+    sa.Column("role", sa.String(16), nullable=False, default="staff"),  # admin | staff
+    sa.Column("active", sa.Boolean, nullable=False, default=True),
+    sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+)
 
 _engines = {}
+
+
+def _prepare(eng):
+    if eng.dialect.name == "sqlite":
+        @sa.event.listens_for(eng, "connect")
+        def _sqlite(dbapi_conn, _rec):
+            cur = dbapi_conn.cursor()
+            cur.execute("PRAGMA journal_mode=WAL")
+            cur.execute("PRAGMA busy_timeout=5000")
+            cur.close()
+    md.create_all(eng)
+    insp = sa.inspect(eng)
+    if insp.has_table("order_attribution"):
+        cols = {c["name"] for c in insp.get_columns("order_attribution")}
+        if "goods" not in cols:
+            with eng.begin() as conn:
+                conn.execute(sa.text("ALTER TABLE order_attribution ADD COLUMN goods FLOAT"))
 
 
 def engine(url=None):
     url = url or database_url()
     if url not in _engines:
         kw = {"connect_args": {"check_same_thread": False}} if url.startswith("sqlite") else {"pool_pre_ping": True}
-        _engines[url] = sa.create_engine(url, future=True, **kw)
-        md.create_all(_engines[url])
+        eng = sa.create_engine(url, future=True, **kw)
+        _prepare(eng)
+        _engines[url] = eng
     return _engines[url]
 
 
@@ -101,8 +130,19 @@ def save_reports(docs, attribution_rows=None, url=None):
         if attribution_rows is not None:
             conn.execute(order_attribution.delete())
             if attribution_rows:
-                conn.execute(order_attribution.insert(), [
-                    {**r, "date": datetime.strptime(r["date"], "%Y-%m-%d").date()} for r in attribution_rows])
+                conn.execute(order_attribution.insert(), [_attr_row(r) for r in attribution_rows])
+
+
+def _attr_row(r):
+    d = r["date"]
+    if isinstance(d, str):
+        d = datetime.strptime(d[:10], "%Y-%m-%d").date()
+    goods = r.get("goods")
+    return {
+        "ref": r["ref"], "date": d, "ad": r.get("ad"), "campaign": r.get("campaign"),
+        "source": r.get("source"), "stage": r["stage"], "total": r["total"],
+        "goods": float(r["total"] if goods is None else goods),
+    }
 
 
 def load_reports(url=None):
@@ -110,8 +150,17 @@ def load_reports(url=None):
         return {r.name: r.doc for r in conn.execute(sa.select(reports.c.name, reports.c.doc))}
 
 
+def dedupe_spend(rows):
+    """One row per (date, ad_id). Later rows win, so a fresher `today` pull replaces `last_30d`."""
+    merged = {}
+    for r in rows:
+        merged[(r["date"], str(r["ad_id"]))] = r
+    return list(merged.values())
+
+
 def save_meta_spend(rows, url=None):
     """Upsert by (date, ad_id): delete the dates we received, then insert."""
+    rows = dedupe_spend(rows)
     if not rows:
         return
     dates = sorted({r["date"] for r in rows})
@@ -184,6 +233,57 @@ def _iso(dt):
     if dt.tzinfo is None:  # SQLite drops the offset; we always write Algiers time
         dt = dt.replace(tzinfo=DZ)
     return dt.astimezone(DZ).isoformat(timespec="minutes")
+
+
+def _staff_dict(m):
+    return {"email": m["email"], "name": m["name"] or "", "role": m["role"], "active": bool(m["active"]),
+            "password_hash": m["password_hash"], "created_at": _iso(m["created_at"])}
+
+
+def get_staff(email, url=None):
+    email = (email or "").strip().lower()
+    if not email:
+        return None
+    with tx(url) as conn:
+        row = conn.execute(sa.select(staff).where(staff.c.email == email)).first()
+    return _staff_dict(row._mapping) if row else None
+
+
+def list_staff(url=None):
+    with tx(url) as conn:
+        rows = conn.execute(sa.select(staff).order_by(staff.c.email)).all()
+    return [{"email": r.email, "name": r.name or "", "role": r.role, "active": bool(r.active)} for r in rows]
+
+
+def count_active_admins(url=None):
+    with tx(url) as conn:
+        q = sa.select(sa.func.count()).select_from(staff).where(staff.c.role == "admin", staff.c.active.is_(True))
+        return int(conn.execute(q).scalar() or 0)
+
+
+def upsert_staff(email, name, role, password_hash=None, active=True, url=None):
+    email = email.strip().lower()
+    with tx(url) as conn:
+        existing = conn.execute(sa.select(staff.c.email).where(staff.c.email == email)).first()
+        values = {"name": (name or "")[:120], "role": role, "active": bool(active)}
+        if password_hash:
+            values["password_hash"] = password_hash
+        if existing:
+            conn.execute(staff.update().where(staff.c.email == email).values(**values))
+        else:
+            conn.execute(staff.insert().values(email=email, created_at=now(), **values))
+    return get_staff(email, url)
+
+
+def deactivate_staff(email, url=None):
+    """Mark a staff account inactive. Returns False when the email was not in the table."""
+    email = (email or "").strip().lower()
+    with tx(url) as conn:
+        found = conn.execute(sa.select(staff.c.email).where(staff.c.email == email)).first()
+        if not found:
+            return False
+        conn.execute(staff.update().where(staff.c.email == email).values(active=False))
+    return True
 
 
 def spend_token(nonce, url=None):

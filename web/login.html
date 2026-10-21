@@ -1,47 +1,91 @@
 <!doctype html>
-<html lang="en">
+<html lang="fr" dir="ltr">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Sign in · Hamiz Pulse</title>
-<meta name="theme-color" content="#f6f3f0" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#131110" media="(prefers-color-scheme: dark)">
+<title>Hamiz Pulse</title>
+<meta name="theme-color" content="#E30613">
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Noto+Sans+Arabic:wght@400;600;700&display=swap">
 <link rel="stylesheet" href="/styles.css">
-<style>
-.login{max-width:420px;margin:0 auto;padding:12vh 16px 40px;display:grid;gap:16px}
-.login .brand b{font-size:28px}
-.login form{display:grid;gap:10px}
-.login input{border:1px solid var(--line);background:var(--surface);border-radius:10px;padding:10px 12px;font-size:16px;min-height:44px}
-.login .btn{min-height:44px;font-size:16px}
-</style>
+<script>
+try{
+  var l=JSON.parse(localStorage.getItem("hp.lang")||'"fr"');
+  if(["fr","ar","en"].indexOf(l)<0)l="fr";
+  document.documentElement.lang=l==="ar"?"ar":l;
+  document.documentElement.dir=l==="ar"?"rtl":"ltr";
+}catch(e){document.documentElement.lang="fr";}
+</script>
 </head>
 <body>
 <main class="login">
+  <div class="lang" id="langs" role="group"></div>
   <div class="brand"><b>Hamiz <span>Pulse</span></b></div>
-  <p class="hint">Sales and Meta Ads for HamizOnline. Enter your work email and we will send you a sign-in link.</p>
+  <p class="hint" id="intro"></p>
   <div id="msg"></div>
+  <form id="pw">
+    <label for="email" class="hint" id="emailLabel"></label>
+    <input id="email" type="email" autocomplete="username" inputmode="email" required>
+    <label for="password" class="hint" id="passwordLabel"></label>
+    <input id="password" type="password" autocomplete="current-password" required>
+    <button class="btn" id="submit" type="submit"></button>
+  </form>
+  <p class="hint" id="or" style="text-align:center"></p>
   <form id="f">
-    <label for="email" class="hint">Email</label>
-    <input id="email" type="email" autocomplete="email" inputmode="email" required>
-    <button class="btn" type="submit">Send sign-in link</button>
+    <button class="btn ghost" id="linkBtn" type="submit"></button>
   </form>
 </main>
+<script src="/i18n.js"></script>
 <script>
 (function(){
-  const msg=document.getElementById("msg"),f=document.getElementById("f");
-  const show=(t,cls)=>{msg.className="banner"+(cls?" "+cls:"");msg.textContent=t};
-  if(new URLSearchParams(location.search).get("error")==="link")show("That link has expired or was already used. Ask for a new one.","bad");
-  f.onsubmit=async e=>{
-    e.preventDefault();const btn=f.querySelector("button");btn.disabled=true;
-    try{const r=await fetch("/auth/request",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({email:document.getElementById("email").value})});
-      const d=await r.json();show(d.message+" Open it on this phone.")}
-    catch(err){show("Could not reach the server. Try again.","bad")}
+  const store={get(k,f){try{const v=localStorage.getItem("hp."+k);return v==null?f:JSON.parse(v)}catch(e){return f}},set(k,v){try{localStorage.setItem("hp."+k,JSON.stringify(v))}catch(e){}}};
+  function lang(){const v=store.get("lang","fr");return v==="ar"||v==="en"||v==="fr"?v:"fr"}
+  function t(key){const packs=window.PULSE_I18N||{}, pack=packs[lang()]||{}, en=packs.en||{};return pack[key]!=null?pack[key]:en[key]!=null?en[key]:key}
+  const msg=document.getElementById("msg");
+  const show=(key,cls)=>{msg.className="banner"+(cls?" "+cls:"");msg.textContent=t(key)};
+  function paint(){
+    const l=lang();
+    document.documentElement.lang=l==="ar"?"ar":l;
+    document.documentElement.dir=l==="ar"?"rtl":"ltr";
+    document.title=t("app.title");
+    document.getElementById("intro").textContent=t("login.intro");
+    document.getElementById("emailLabel").textContent=t("login.email");
+    document.getElementById("passwordLabel").textContent=t("login.password");
+    document.getElementById("submit").textContent=t("login.submit");
+    document.getElementById("or").textContent=t("login.or");
+    document.getElementById("linkBtn").textContent=t("login.link");
+    const el=document.getElementById("langs");
+    el.setAttribute("aria-label",t("lang.group"));
+    el.innerHTML=[["fr","FR","lang.fr"],["ar","ع","lang.ar"],["en","EN","lang.en"]].map(([id,lab,key])=>`<button type="button" data-lang="${id}" aria-pressed="${l===id}" aria-label="${t(key)}">${lab}</button>`).join("");
+    el.querySelectorAll("[data-lang]").forEach(b=>b.onclick=()=>{store.set("lang",b.dataset.lang);paint();if(msg.textContent)show(msg.dataset.key,msg.dataset.cls)});
+    if(new URLSearchParams(location.search).get("error")==="link")show("login.linkError","bad");
+  }
+  function remember(key,cls){msg.dataset.key=key;msg.dataset.cls=cls||""}
+  document.getElementById("pw").onsubmit=async e=>{
+    e.preventDefault();
+    const btn=document.getElementById("submit");btn.disabled=true;
+    try{
+      const r=await fetch("/auth/login",{method:"POST",credentials:"same-origin",cache:"no-store",headers:{"Content-Type":"application/json"},body:JSON.stringify({email:document.getElementById("email").value,password:document.getElementById("password").value})});
+      const d=await r.json();
+      if(r.ok&&d.ok){location.href="/";return}
+      const key=d.error==="throttled"?"login.throttled":"login.bad";
+      remember(key,"bad");show(key,"bad");
+    }catch(err){remember("login.unreachable","bad");show("login.unreachable","bad")}
     btn.disabled=false;
   };
+  document.getElementById("f").onsubmit=async e=>{
+    e.preventDefault();
+    const btn=document.getElementById("linkBtn");btn.disabled=true;
+    try{
+      const r=await fetch("/auth/request",{method:"POST",credentials:"same-origin",cache:"no-store",headers:{"Content-Type":"application/json"},body:JSON.stringify({email:document.getElementById("email").value})});
+      if(!r.ok)throw new Error("bad");
+      remember("login.sent","");show("login.sent");
+    }catch(err){remember("login.unreachable","bad");show("login.unreachable","bad")}
+    btn.disabled=false;
+  };
+  paint();
 })();
 </script>
 </body>

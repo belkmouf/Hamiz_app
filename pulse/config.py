@@ -9,6 +9,9 @@ TZ_NAME = "Africa/Algiers"
 MAX_DOC = 250_000          # bytes per stored report document
 ORDERS_KEEP = 400          # rows in the orders document
 STALE_MINUTES = 150        # sync older than this shows red
+GOAL_LOW = 200             # orders placed per day
+GOAL_HIGH = 250
+SPEND_CAP = 0.05           # ad spend / merchandise order value
 
 # Labels from the Hamiz sale.order export, matched case-insensitively against fields_get labels.
 ORDER_LABELS = {
@@ -63,3 +66,11 @@ def database_url():
 
 def allowed_emails():
     return {e.strip().lower() for e in (env("APP_ALLOWED_EMAILS", "") or "").split(",") if e.strip()}
+
+
+def fx():
+    """DZD the business pays per 1 USD of Meta spend. Not the official rate."""
+    try:
+        return float(env("PULSE_FX", "250"))
+    except (TypeError, ValueError):
+        return 250.0
