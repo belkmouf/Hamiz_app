@@ -2,9 +2,11 @@
 import socket
 import time
 import xmlrpc.client
+from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
 from .config import DZ, env, line_labels, order_labels
+from .metrics import goods_value
 from .stages import classify, to_local
 
 BATCH = 1000
@@ -112,8 +114,16 @@ def connect():
     return Odoo(vals["ODOO_URL"], vals["ODOO_DB"], vals["ODOO_USER"], vals["ODOO_KEY"])
 
 
-def pull(od, days=90, log=print):
-    """Return (orders, lines, mapping) normalised for pulse.aggregate."""
+def _utc_stamp(dt):
+    return dt.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def pull(od, days=90, log=print, start=None, end=None, line_scope="recent"):
+    """Return (orders, lines, mapping) normalised for pulse.aggregate.
+
+    `start`/`end` are inclusive Africa/Algiers dates. Hourly sync uses `days` instead.
+    `line_scope="all"` fetches lines for every returned order (reconciliation of one day).
+    """
     of = od.fields("sale.order")
     omap = pick(of, order_labels(), exclude=set(ORDER_STD) | {"create_date", "write_date"})
     if omap.get("wilaya") and of[omap["wilaya"]]["type"] not in ("many2one", "char", "selection"):
@@ -128,8 +138,15 @@ def pull(od, days=90, log=print):
         raise OdooError(f"PULSE_ORDER_DATE_FIELD={date_field!r} is not a datetime field on sale.order")
     extra = [f for f in ("create_date", date_field) if f in of and f not in ORDER_STD]
     ofields = [f for f in ORDER_STD if f in of] + sorted(set(omap.values()) | set(extra))
-    since = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
-    raw = od.search_read("sale.order", [[date_field, ">=", since]], ofields, order=f"{date_field} asc")
+    if start or end:
+        start = start or end
+        end = end or start
+        domain = [[date_field, ">=", _utc_stamp(datetime.combine(start, datetime.min.time(), tzinfo=DZ))],
+                  [date_field, "<", _utc_stamp(datetime.combine(end + timedelta(days=1), datetime.min.time(), tzinfo=DZ))]]
+    else:
+        since = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+        domain = [[date_field, ">=", since]]
+    raw = od.search_read("sale.order", domain, ofields, order=f"{date_field} asc")
     raw = [r for r in raw if r.get(date_field)]
     date_check = {"field": date_field, "orders": len(raw), "date_order_after_create_1h": None}
     if "create_date" in of:
@@ -184,25 +201,39 @@ def pull(od, days=90, log=print):
     id_ref = {o["id"]: o["ref"] for o in orders}
     flags = [f for f in ("display_type", "is_delivery") if f in lf]
     lfields = ["order_id", "product_id", "product_uom_qty", "price_total"] + flags + sorted(set(lmap.values()))
+    if line_scope == "all":
+        line_ids = [o["id"] for o in orders]
+    else:
+        line_ids = recent_ids
     lines = []
     skipped = {"section_or_note": 0, "delivery_fee": 0}
-    for i in range(0, len(recent_ids), BATCH):
+    product_amounts = defaultdict(list)
+    delivery_amounts = defaultdict(float)
+    for i in range(0, len(line_ids), BATCH):
         if i:
             od.sleep(PAUSE)
-        for ln in od.search_read("sale.order.line", [["order_id", "in", recent_ids[i:i + BATCH]]], lfields):
+        for ln in od.search_read("sale.order.line", [["order_id", "in", line_ids[i:i + BATCH]]], lfields):
+            oid = ln["order_id"][0] if ln.get("order_id") else None
+            ref = id_ref.get(oid)
+            amount = float(ln.get("price_total") or 0)
             if ln.get("display_type"):  # section and note lines carry no product or amount
                 skipped["section_or_note"] += 1
                 continue
             if ln.get("is_delivery"):  # shipping charged to the customer is not a product or a seller's sale
                 skipped["delivery_fee"] += 1
+                if ref:
+                    delivery_amounts[ref] += amount
                 continue
-            oid = ln["order_id"][0] if ln.get("order_id") else None
 
-            def lval(key):
+            def lval(key, ln=ln):
                 f = lmap.get(key)
                 return m2o(ln.get(f)) if f and ln.get(f) is not False else None
-            lines.append({"order_ref": id_ref.get(oid), "product": m2o(ln.get("product_id")),
-                          "qty": float(ln.get("product_uom_qty") or 0), "amount": float(ln.get("price_total") or 0),
+            if ref:
+                product_amounts[ref].append(amount)
+            lines.append({"order_ref": ref, "product": m2o(ln.get("product_id")),
+                          "qty": float(ln.get("product_uom_qty") or 0), "amount": amount,
                           "seller": lval("seller"), "category": lval("category")})
+    for o in orders:
+        o["goods"] = goods_value(o["total"], product_amounts.get(o["ref"]), delivery_amounts.get(o["ref"], 0.0))
     mapping = {"order": omap, "line": lmap, "date": date_check, "lines_skipped": skipped}
     return orders, lines, mapping

@@ -91,7 +91,9 @@ def sync_meta(url=None, client=None, log=print):
     try:
         client = client or meta_ads.connect()
         account = client.account_info()
-        rows = client.insights("last_30d") + client.insights("today")
+        # last_30d and today can both contain today's rows. Dedupe keeps the later (today) copy
+        # so the (date, ad_id) primary key does not reject the run.
+        rows = store.dedupe_spend(client.insights("last_30d") + client.insights("today"))
         store.save_meta_spend(rows, url)
         store.save_reports({"meta_account": {**account, "checked_at": store.now().isoformat(timespec="minutes")}}, None, url)
         if account.get("currency") != "USD":
@@ -119,7 +121,8 @@ def seed(url=None, force=False, log=print):
     today = store.now().date()
     with open(SEED / "orders.csv", newline="", encoding="utf-8") as f:
         att = [{"ref": f"EX{i:04d}", "date": today.isoformat(), "ad": (r["ad_name"] or None),
-                "campaign": "Lampes" if r["ad_name"] else None, "source": "fb" if r["ad_name"] else None, "stage": r["status"], "total": float(r["value"] or 0)}
+                "campaign": "Lampes" if r["ad_name"] else None, "source": "fb" if r["ad_name"] else None,
+                "stage": r["status"], "total": float(r["value"] or 0), "goods": float(r["value"] or 0)}
                for i, r in enumerate(csv.DictReader(f))]
     with open(SEED / "ads.csv", newline="", encoding="utf-8") as f:
         spend = [{"date": today, "ad_id": f"ex{i}", "campaign_id": "ex", "campaign_name": "Lampes",

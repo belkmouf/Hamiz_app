@@ -92,3 +92,38 @@ def test_account_info_request():
     m = meta_ads.Meta("t", "9", client=httpx.Client(transport=httpx.MockTransport(handler)), sleep=lambda s: None)
     assert m.account_info()["currency"] == "USD"
     assert seen[0].path.endswith("/act_9") and "currency" in seen[0].params["fields"]
+
+
+def test_insights_uses_time_range_for_one_day():
+    seen = []
+
+    def handler(req):
+        seen.append(req.url)
+        return httpx.Response(200, json={"data": [row("9", day="2026-10-04", spend="10.00")]})
+    m = meta_ads.Meta("t", "9", client=httpx.Client(transport=httpx.MockTransport(handler)), sleep=lambda s: None)
+    rows = m.insights(since="2026-10-04", until="2026-10-04")
+    assert rows[0]["spend_usd"] == 10.0 and rows[0]["date"].isoformat() == "2026-10-04"
+    assert "time_range" in str(seen[0]) and "2026-10-04" in str(seen[0])
+    with pytest.raises(meta_ads.MetaError):
+        m.insights()
+
+
+class OverlapMeta:
+    """last_30d and today both return today's ad, with different spend. Today must win."""
+
+    def account_info(self):
+        return {"currency": "USD", "timezone_name": "Africa/Algiers", "timezone_offset_hours_utc": 1}
+
+    def insights(self, date_preset=None, since=None, until=None):
+        today = store.now().date().isoformat()
+        if date_preset == "today":
+            return [meta_ads.normalise(row("1", day=today, spend="4.00"))]
+        return [meta_ads.normalise(row("1", day=today, spend="9.00")),
+                meta_ads.normalise(row("1", day="2026-09-01", spend="9.00"))]
+
+
+def test_sync_dedupes_overlapping_presets(db_url):
+    sync.sync_meta(client=OverlapMeta(), log=lambda *_: None)
+    today = store.now().date()
+    rows = store.spend_between(today, today)
+    assert len(rows) == 1 and rows[0]["spend_usd"] == 4.0

@@ -174,5 +174,7 @@ def attribution(orders, now, days=30):
     `ad` is the order's utm_content (the Meta ad name), `campaign` and `source` its UTM campaign and source."""
     since = now.date() - timedelta(days=days - 1)
     return [{"ref": o["ref"], "date": o["dt"].date().isoformat(), "ad": (o.get("utm_content") or None),
-             "campaign": o.get("campaign"), "source": o.get("source"), "stage": o["stage"], "total": round(float(o["total"]), 2)}
+             "campaign": o.get("campaign"), "source": o.get("source"), "stage": o["stage"],
+             "total": round(float(o["total"]), 2),
+             "goods": round(float(o["goods"] if o.get("goods") is not None else o["total"]), 2)}
             for o in orders if o["dt"].date() >= since]

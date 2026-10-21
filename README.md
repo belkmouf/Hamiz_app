@@ -23,17 +23,23 @@ Meta Insights API --ads_read----^
 | `pulse/adjoin.py` | Joins Meta spend to Odoo orders on `utm_content == ad name`, falls back to the campaign name, and puts orders with no UTM in UNATTRIBUTED |
 | `pulse/calc.py`, `web/calc.js` | CAC budget and Ad review rules (Python and browser copies, tested against each other and against `reference/dz_cod_calc.py`) |
 | `pulse/sync.py` | The hourly job: single-run lock, `sync_runs` log, keeps the last good data when a run fails |
-| `pulse/api.py` | Magic-link login, `/api/reports`, `/api/ads`, `/api/status`, and the static PWA |
-| `web/` | The app (9 tabs), login page, manifest, service worker, icons |
+| `pulse/api.py` | Password login, magic links, staff admin, `/api/reports`, `/api/ads`, `/api/status`, and the static PWA |
+| `pulse/metrics.py` | 200–250 orders/day and the 5% ad-spend check (merchandise DZD, Algiers days) |
+| `pulse/reconcile.py` | One-day comparison of stored figures with a live Odoo and Meta query |
+| `web/` | The app (9 tabs, French / Arabic / English), login page, manifest, service worker, icons |
 
 ## Run locally
 
 ```bash
 pip install -r requirements-dev.txt
-export APP_SECRET_KEY=dev APP_ALLOWED_EMAILS=you@example.com
+export APP_SECRET_KEY=dev APP_ADMIN_EMAIL=you@example.com APP_ADMIN_PASSWORD=dev-password
 uvicorn pulse.api:app --reload        # loads the example data into an empty store
-# open http://localhost:8000, enter your email; with no SMTP_HOST the sign-in link prints in this terminal
+# open http://localhost:8000 and sign in with that email and password
 ```
+
+The phone UI starts in French. FR / ع / EN in the header switches language and remembers the choice on the device. Arabic lays the page out right to left.
+
+Employees sign in with the password an admin set. Magic-link email still works when `SMTP_HOST` is set. Without it, a requested link is only printed in the server log, which is for local development. See `DEPLOY.md` for Render, the first admin, and how to add staff.
 
 To pull real data, set the Odoo and Meta variables from `.env.example`, then run:
 
@@ -45,7 +51,7 @@ python -m pulse.sync --seed --force   # put the example data back
 
 ## Deploy (Render)
 
-`render.yaml` creates a web service, an hourly cron at :07, and Postgres. Fill in the secrets marked `sync: false` in the dashboard: Odoo user and API key, Meta system-user token and ad account, allowed emails, base URL and SMTP. Without SMTP, sign-in links appear in the web service log. Railway or any server works the same way: run `uvicorn pulse.api:app` behind HTTPS, and add a crontab entry for `python -m pulse.sync`.
+`render.yaml` creates a web service (starter, so it does not sleep), an hourly cron at :07 UTC, and Postgres. Every secret, the first admin, employee passwords, and the live reconciliation command are in `DEPLOY.md`. Railway or any server works the same way: run `uvicorn pulse.api:app` behind HTTPS, and add a crontab entry for `python -m pulse.sync`.
 
 Accounts to create:
 - **Odoo:** a dedicated user with read access to Sales only, plus an API key.
@@ -55,16 +61,22 @@ Accounts to create:
 
 | Endpoint | Returns |
 |---|---|
-| `GET /api/reports` | `summary`, `sellers`, `products`, `orders` documents + `sync` status. About 115 KB raw and 15 KB gzipped at 20,000 orders |
+| `GET /api/reports` | `summary`, `sellers`, `products`, `orders`, `sync` (including `last_synced_at`), and `pulse` (the 200–250 goal and today's 5% check). About 115 KB raw and 15 KB gzipped at 20,000 orders |
 | `GET /api/ads?window=today\|yesterday\|last7` | Spend per ad, order groups per ad, days each ad has run, and the count of orders left out because they came from other channels |
-| `GET /api/status` | Sync state: `live`, `example`, `stale` (>150 min), `failed`, `empty`. The app polls this every 5 minutes |
+| `GET /api/status` | Sync state: `live`, `example`, `stale` (>150 min), `failed`, `empty`. The app polls this every 5 minutes and on pull-to-refresh |
+| `GET /api/me` | The signed-in email, name, and role |
+| `GET/POST/DELETE /api/staff` | Admin only. Add, update, or deactivate employees |
+| `POST /auth/login` | Email and password. Unknown emails and wrong passwords get the same error |
+| `GET /api/admin/reconcile?date=` | Admin only. One Algiers day against live Odoo and Meta |
 
-All three need a session. Sessions last 30 days, and removing an email from `APP_ALLOWED_EMAILS` signs that person out on their next request.
+Sessions last 30 days. The role is read on every request, so deactivating someone or removing them from `APP_ALLOWED_EMAILS` signs them out on the next call. API responses send `Cache-Control: no-store`.
 
 ## Tests
 
 ```bash
-pytest                      # 86 tests; the layout test needs Playwright + Chromium and is skipped otherwise
+pip install -r requirements-dev.txt
+python -m playwright install chromium
+pytest                      # layout and phone tests need Playwright + Chromium and are skipped otherwise
 ```
 
 These cover the PRD §14 acceptance tests:
@@ -74,9 +86,15 @@ These cover the PRD §14 acceptance tests:
 - **Stage table:** every row, including `refused` → returned and plain `state=cancel` → cancelled.
 - **Time zone:** 2026-10-03 23:30 UTC lands on 2026-10-04 at hour 0.
 - **Size:** 20,000 orders in 90 days keep every document under 250 KiB.
-- **Layout:** no horizontal scroll at 375 px on all 9 tabs, light and dark (Playwright).
+- **Layout:** no horizontal scroll at 375×812 on all 9 tabs, light and dark (Playwright).
+- **Daily questions:** merchandise value excludes delivery fees, the goal is the closed band 200–250 on the last 7 complete Algiers days, and ad spend / that value is at or under 5%.
+- **Languages:** every UI key exists in English, French, and Arabic. Arabic renders `dir=rtl` at phone width.
 
-Also covered: login (single-use and expiring links, no hint about which emails are allowed), failed sync keeping the last good data, the sync lock, Odoo batching and backoff, Meta paging and rate-limit retry, and the join rules.
+Also covered: password login and staff admin (single-use expiring magic links still, with no hint about which emails are allowed), failed sync keeping the last good data, the sync lock, Odoo batching and backoff, Meta paging and rate-limit retry, overlapping Meta day rows, uncached API responses, concurrent sessions, and the join rules.
+
+`python -m pulse.reconcile --mock` checks the comparison on fake Odoo and Meta. The live check, with real credentials, is in `DEPLOY.md`.
+
+Example files in `pulse/seed/` and `reference/seed_example/` include shop names that look like real sellers, and this repo names `erp.hamizonline.com`. They are example records in a public repo. See `DEPLOY.md`.
 
 ## Where this build differs from the reference (on purpose)
 

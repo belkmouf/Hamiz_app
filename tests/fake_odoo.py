@@ -39,15 +39,19 @@ def utc(days_ago, hour=12):
 
 
 class FakeOdoo:
-    def __init__(self, n=2500, fail=False, confirm_delay_hours=0, no_custom_status=False):
+    def __init__(self, n=2500, fail=False, confirm_delay_hours=0, no_custom_status=False, include_delivery_in_total=False):
         self.calls = []
         self.fail = fail
         self.sleeps = []
         self.orders = []
         statuses = ["Delivered", "Expédiée", "pending", "Canceled", "Refusé", "processing"]
         for i in range(n):
+            # id % 5 == 0 is the order that also carries a delivery line. Add that fee to the total
+            # so amount_total matches Odoo (shipping included) while product lines stay at 4,500.
+            delivery_extra = 400.0 if include_delivery_in_total and (i + 1) % 5 == 0 else 0.0
             self.orders.append({
-                "id": i + 1, "name": f"S{i:05d}", "date_order": utc(i % 80, hour=(i * 7) % 24), "amount_total": 4500.0,
+                "id": i + 1, "name": f"S{i:05d}", "date_order": utc(i % 80, hour=(i * 7) % 24),
+                "amount_total": 4500.0 + delivery_extra,
                 "state": "cancel" if i % 50 == 0 else "sale", "invoice_status": "no", "partner_id": [i + 1, f"Client {i}"],
                 "user_id": False, "campaign_id": [1, "Lampes"] if i % 2 else False, "source_id": [1, "fb"] if i % 2 else False,
                 "medium_id": False, "x_magento_id": f"1000{i}", "magento_status_std": "ignored",
@@ -79,8 +83,21 @@ class FakeOdoo:
             domain = args[0]
             offset, limit = kw.get("offset", 0), kw.get("limit", 1000)
             if model == "sale.order":
-                fld, _, since = domain[0]
-                rows = [{k: o[k] for k in kw["fields"]} | {"id": o["id"]} for o in self.orders if o[fld] >= since]
+                rows = []
+                for o in self.orders:
+                    ok = True
+                    for fld, op, val in domain:
+                        left = o.get(fld)
+                        if op == ">=" and not (left is not None and left >= val):
+                            ok = False
+                        elif op == ">" and not (left is not None and left > val):
+                            ok = False
+                        elif op == "<" and not (left is not None and left < val):
+                            ok = False
+                        elif op == "<=" and not (left is not None and left <= val):
+                            ok = False
+                    if ok:
+                        rows.append({k: o[k] for k in kw["fields"]} | {"id": o["id"]})
                 return rows[offset:offset + limit]
             ids = set(domain[0][2])
             rows = []

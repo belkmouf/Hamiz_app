@@ -130,3 +130,27 @@ def test_date_order_moved_on_confirmation_is_reported_and_switchable(monkeypatch
     monkeypatch.setenv("PULSE_ORDER_DATE_FIELD", "x_store")
     with pytest.raises(odoo.OdooError):
         odoo.pull(fake, log=lambda *_: None)
+
+
+def test_goods_value_excludes_delivery_fee():
+    """amount_total includes shipping; the 5% check uses product lines only."""
+    orders, _, _ = odoo.pull(FakeOdoo(n=5, include_delivery_in_total=True), log=lambda *_: None)
+    by_ref = {o["ref"]: o for o in orders}
+    shipped = by_ref["S00004"]  # id 5: delivery line of 400, and the total includes it
+    assert shipped["total"] == 4900
+    assert shipped["goods"] == 4500
+
+
+def test_algiers_day_window_includes_previous_utc_evening():
+    """2026-10-03 23:30 UTC is 2026-10-04 00:30 in Algiers, so it belongs to the 4th."""
+    from datetime import date
+
+    fake = FakeOdoo(n=1)
+    fake.orders[0]["date_order"] = "2026-10-03 23:30:00"
+    fake.orders[0]["create_date"] = "2026-10-03 23:30:00"
+    on_fourth, _, _ = odoo.pull(fake, start=date(2026, 10, 4), end=date(2026, 10, 4), log=lambda *_: None)
+    assert len(on_fourth) == 1
+    assert on_fourth[0]["dt"].date() == date(2026, 10, 4)
+    assert on_fourth[0]["dt"].hour == 0
+    on_third, _, _ = odoo.pull(fake, start=date(2026, 10, 3), end=date(2026, 10, 3), log=lambda *_: None)
+    assert on_third == []
